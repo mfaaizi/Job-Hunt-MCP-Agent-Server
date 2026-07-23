@@ -1,2 +1,1 @@
-# Grade-Multi-Agent-System
-Enterprise-Grade Multi-Agent System
+# Job-Hunt MCP Agent Server
