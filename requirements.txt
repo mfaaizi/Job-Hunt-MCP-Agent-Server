@@ -1,0 +1,25 @@
+# MCP server framework
+fastmcp>=2.0.0
+
+# Data validation / schema
+pydantic>=2.6.0
+
+# Database
+sqlmodel>=0.0.16
+
+# Resume parsing (PDF / DOCX)
+pypdf>=4.0.0
+pdfplumber>=0.11.0
+python-docx>=1.1.0
+
+# Job search API client
+httpx>=0.27.0
+
+# Embeddings for job-to-profile matching
+sentence-transformers>=2.7.0
+
+# Local LLM (Ollama) client for resume/cover-letter tailoring
+ollama>=0.2.0
+
+# Env config
+python-dotenv>=1.0.0
