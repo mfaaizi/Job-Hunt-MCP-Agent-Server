@@ -1,81 +1,243 @@
-# job-agent MCP Server
+<div align="center">
 
-A multi-agent job-hunt system exposed as an MCP (Model Context Protocol) server, built with FastMCP.
-Runs locally, driven by local Ollama models (e.g. Qwen3, MiniMax) through an MCP client.
+# JOB AGENT MCP SERVER
+
+**An autonomous, multi-agent job-hunting system exposed as an MCP server — running entirely on local, open-weight LLMs.**
+
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastMCP](https://img.shields.io/badge/FastMCP-3.x-blue)](https://gofastmcp.com)
+[![Ollama](https://img.shields.io/badge/Ollama-local%20LLMs-000000?logo=ollama&logoColor=white)](https://ollama.com)
+[![SQLite](https://img.shields.io/badge/SQLite-embedded%20DB-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![License](https://img.shields.io/badge/license-MIT-green)](#license)
+
+*Parse your resume → search real jobs → rank them by fit → tailor your application → track your pipeline — all through natural conversation with a local model, no cloud LLM required.*
+
+</div>
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Agents & Tools](#agents--tools)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Usage](#usage)
+- [Data Flow: A Full Job-Hunt Cycle](#data-flow-a-full-job-hunt-cycle)
+- [Design Decisions](#design-decisions)
+- [Known Limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+---
+
+## Overview
+
+`job-agent-mcp` is a **FastMCP server** that turns a local Ollama model into a multi-agent job-hunting assistant. Instead of one monolithic chatbot, the system is built as five specialized agents — each with a narrow, well-defined job — coordinated through the Model Context Protocol (MCP):
+
+| Agent | Responsibility |
+|---|---|
+| 📄 **Resume Parser** | Extracts a normalized, structured JSON profile from your PDF/DOCX resume |
+| 🔍 **Job Search** | Queries live job listings (LinkedIn, Indeed, Glassdoor, and more via JSearch) |
+| 🎯 **Matcher** | Scores saved jobs against your resume using semantic embeddings |
+| ✍️ **Writer** | Drafts tailored resume content and cover letters per job |
+| 📋 **Pipeline Tracker** | Tracks each application through saved → drafted → applied → interviewing → offer/rejected |
+
+Everything runs **locally** — resume parsing, embeddings, and writing all go through Ollama on your own machine. The only external network call in the whole system is the job search API itself.
+
+---
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    User(["👤 You"])
+
+    subgraph Client["Client Layer"]
+        Bridge["ollama-mcp-bridge<br/><i>FastAPI proxy · localhost:8000</i>"]
+    end
+
+    subgraph Brain["Reasoning"]
+        Ollama["🧠 Ollama<br/><i>llama3.2:3b (or similar)</i><br/>tool selection & reasoning"]
+    end
+
+    subgraph Server["job-agent MCP Server (this repo)"]
+        direction TB
+        MCP["FastMCP Server<br/><i>stdio transport · 14 tools</i>"]
+
+        subgraph Agents["Specialized Agents"]
+            direction LR
+            RP["📄 Resume<br/>Parser"]
+            JS["🔍 Job<br/>Search"]
+            MA["🎯 Matcher"]
+            WR["✍️ Writer"]
+            PT["📋 Pipeline<br/>Tracker"]
+        end
+
+        MCP --> RP & JS & MA & WR & PT
+    end
+
+    subgraph External["External Services"]
+        JSearch["🌐 JSearch API<br/><i>OpenWeb Ninja</i>"]
+        EmbedModel["🧠 Ollama<br/><i>nomic-embed-text</i>"]
+    end
+
+    subgraph Storage["Local Storage"]
+        DB[("🗄️ SQLite<br/>jobs · matches · applications")]
+        Files["📁 Resume JSON<br/>Tailored Materials"]
+    end
+
+    User -->|"types a request"| Bridge
+    Bridge <-->|"/api/chat"| Ollama
+    Ollama -.->|"tool call"| Bridge
+    Bridge <-->|"MCP protocol"| MCP
+
+    RP -->|"structure resume"| Ollama
+    JS -->|"search listings"| JSearch
+    MA -->|"embed & compare"| EmbedModel
+    WR -->|"tailor content"| Ollama
+
+    RP --> Files
+    JS --> DB
+    MA --> DB
+    WR --> Files & DB
+    PT --> DB
+
+    style User fill:#4A90D9,color:#fff
+    style Ollama fill:#000,color:#fff
+    style EmbedModel fill:#000,color:#fff
+    style MCP fill:#2E86AB,color:#fff
+    style DB fill:#003B57,color:#fff
 ```
-You (chat)
-   -> MCP client (ollmcp)
-        -> Ollama (qwen3 / minimax) -- does the reasoning, decides which tool to call
-        -> job-agent MCP server (this project) -- executes the tool, returns the result
-   <- response
-```
 
-Ollama does not natively speak MCP, so a bridge client (`ollmcp`) sits between the model and this
-server. See "Running the server" below.
+**Why a bridge?** Ollama doesn't natively speak MCP — `ollama-mcp-bridge` sits in between, injecting available MCP tools into Ollama's `/api/chat` endpoint and routing tool calls to the actual MCP server over stdio.
 
-## Project status
+---
 
-| Component                                         | Status         |
-|----------------------------------------------------|----------------|
-| Project scaffold                                    | Done           |
-| Resume parser (PDF/DOCX -> normalized JSON)          | Done           |
-| SQLite schema (jobs / matches / applications)        | Done           |
-| JSearch integration (job search)                     | Not started    |
-| Matcher agent (embeddings)                            | Not started    |
-| Writer agent (tailor resume / cover letter)            | Not started    |
-| Pipeline tracking tools                                | Not started    |
+## Agents & Tools
 
-## Project structure
+<table>
+<tr><th>Agent</th><th>Tool</th><th>Purpose</th></tr>
+
+<tr><td rowspan="3">📄 <b>Resume Parser</b></td>
+<td><code>parse_resume</code></td><td>PDF/DOCX → normalized JSON (contact, skills, experience, projects, education)</td></tr>
+<tr><td><code>get_parsed_resume</code></td><td>Retrieve the full structured resume</td></tr>
+<tr><td><code>list_resumes</code></td><td>List all parsed resumes on file</td></tr>
+
+<tr><td rowspan="3">🔍 <b>Job Search</b></td>
+<td><code>search_jobs</code></td><td>Query JSearch (LinkedIn/Indeed/Glassdoor/etc.), dedupe, save locally</td></tr>
+<tr><td><code>get_job_details</code></td><td>Full details for a saved job</td></tr>
+<tr><td><code>list_saved_jobs</code></td><td>Browse everything saved so far</td></tr>
+
+<tr><td rowspan="2">🎯 <b>Matcher</b></td>
+<td><code>match_job_to_profile</code></td><td>Score one job against your resume (embeddings + skill overlap)</td></tr>
+<tr><td><code>rank_jobs</code></td><td>Score and rank <i>all</i> saved jobs, best fit first</td></tr>
+
+<tr><td rowspan="2">✍️ <b>Writer</b></td>
+<td><code>tailor_resume</code></td><td>Rewrite summary + select relevant bullets for a specific job</td></tr>
+<tr><td><code>generate_cover_letter</code></td><td>Draft a job-specific cover letter</td></tr>
+
+<tr><td rowspan="3">📋 <b>Pipeline Tracker</b></td>
+<td><code>log_application</code></td><td>Record status: applied / interviewing / offer / rejected / withdrawn</td></tr>
+<tr><td><code>get_application_status</code></td><td>Check where one application stands</td></tr>
+<tr><td><code>list_pipeline</code></td><td>View your whole pipeline, optionally filtered by status</td></tr>
+
+<tr><td>🩺 <b>Utility</b></td>
+<td><code>ping</code></td><td>Health check — confirms the server is alive and reachable</td></tr>
+</table>
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| MCP Server | [FastMCP](https://gofastmcp.com) (Python) |
+| LLM Runtime | [Ollama](https://ollama.com) — local, open-weight models (tested with `llama3.2:3b`) |
+| MCP ↔ Ollama Bridge | [ollama-mcp-bridge](https://pypi.org/project/ollama-mcp-bridge/) |
+| Resume Parsing | `pdfplumber`, `python-docx` + Ollama structuring |
+| Job Search | [JSearch API](https://www.openwebninja.com/api/jsearch) (OpenWeb Ninja) |
+| Embeddings | Ollama (`nomic-embed-text`) — no separate ML framework needed |
+| Data Validation | `Pydantic` |
+| Database | `SQLite` via `SQLModel` |
+| HTTP Client | `httpx` |
+
+No `torch`, no `sentence-transformers`, no cloud LLM API — the entire pipeline runs on infrastructure you already have once Ollama is installed.
+
+---
+
+## Project Structure
 
 ```
 job-agent-mcp/
+├── mcp-config.json          # Bridge config: how to launch this server
 ├── requirements.txt
 ├── .env.example
+│
 ├── data/
-│   ├── resumes/        <- put your resume PDF/DOCX here; normalized JSON is stored here too
-│   └── db/               <- SQLite database file
-├── scripts/
-│   └── test_tools.py     <- call MCP tools directly, without a client, for debugging
+│   ├── resumes/              # Parsed resume JSON + raw text (per resume_id)
+│   ├── applications/          # Tailored resumes & cover letters (per job × resume)
+│   └── db/                     # SQLite database file
+│
 └── server/
-    ├── config.py          <- loads .env, resolves storage paths
-    ├── main.py              <- FastMCP entry point, registers all tools
-    ├── tools/                <- MCP tool definitions (the functions the model calls)
-    ├── agents/                <- internal logic tools call into (parsing, matching, writing)
-    ├── models/                 <- Pydantic schemas
-    └── db/                      <- SQLModel table definitions + session management
+    ├── main.py                 # FastMCP entry point — registers all tools
+    ├── app.py                   # Shared FastMCP instance (avoids dual-import bug)
+    ├── config.py                 # .env loader, path resolution
+    │
+    ├── models/
+    │   └── resume.py               # Pydantic schema: ResumeCV and friends
+    │
+    ├── db/
+    │   ├── models.py                # SQLModel tables: Job, Match, Application
+    │   └── session.py                # Engine + session management
+    │
+    ├── agents/                        # Core logic, framework-agnostic
+    │   ├── cv_store.py                  # Save/load/resolve parsed resumes
+    │   ├── cv_structurer.py              # Ollama-backed resume → JSON
+    │   ├── matcher.py                     # Embedding similarity + skill overlap
+    │   └── writer.py                       # Tailored resume & cover letter generation
+    │
+    └── tools/                          # MCP tool definitions (the public interface)
+        ├── resume_extractor.py           # PDF/DOCX text + hyperlink extraction
+        ├── resume_parser.py               # parse_resume, get_parsed_resume, list_resumes
+        ├── job_search.py                   # search_jobs, get_job_details, list_saved_jobs
+        ├── matcher_tool.py                  # match_job_to_profile, rank_jobs
+        ├── writer_tool.py                    # tailor_resume, generate_cover_letter
+        └── pipeline_tool.py                   # log_application, get_application_status, list_pipeline
 ```
 
-## Setup
+---
 
-### 1. Prerequisites
+## Getting Started
+
+### Prerequisites
 
 - Python 3.10+
-- [Ollama](https://ollama.com) installed and running locally
+- [Ollama](https://ollama.com) installed and running
+- A free [JSearch API key](https://app.openwebninja.com/api/jsearch) (200 requests/month on the free tier)
 
-### 2. Install Ollama + pull a model
+### 1. Pull the models you need
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama3.2:3b   # or whatever model you're using
-ollama list                # confirm it's there
+ollama pull llama3.2:3b        # or any tool-calling-capable model your hardware supports
+ollama pull nomic-embed-text   # for the matcher agent's embeddings
 ```
 
-### 3. Set up the project
+### 2. Install the project
 
 ```bash
+git clone <this-repo-url>
 cd job-agent-mcp
+
 python3 -m venv venv
-source venv/bin/activate       # Windows: venv\Scripts\activate
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
 pip install -r requirements.txt
 ```
 
-`sentence-transformers` (used by the matcher agent, not yet wired in) pulls in `torch`, which is a
-few GB. Make sure you have disk space free.
-
-### 4. Configure environment variables
+### 3. Configure
 
 ```bash
 cp .env.example .env
@@ -83,130 +245,162 @@ cp .env.example .env
 
 Edit `.env`:
 
-| Variable            | Set to                                              | Needed now? |
-|----------------------|------------------------------------------------------|-------------|
-| `JSEARCH_API_KEY`      | leave as placeholder                                  | not yet — JSearch tool isn't built |
-| `JSEARCH_API_HOST`      | leave default                                          | not yet |
-| `OLLAMA_HOST`             | leave default unless Ollama runs elsewhere              | yes |
-| `OLLAMA_MODEL`             | must exactly match a tag from `ollama list` (e.g. `llama3.2:3b`) | yes |
-| `DATABASE_PATH`             | leave default                                            | yes |
-| `RESUME_STORAGE_DIR`          | leave default                                              | yes |
-| `EMBEDDING_MODEL`              | leave default                                                | not yet — matcher isn't built |
+```ini
+JSEARCH_API_KEY=your_openwebninja_api_key_here
+JSEARCH_BASE_URL=https://api.openwebninja.com/jsearch
+OLLAMA_HOST=http://localhost:11434
+OLLAMA_MODEL=llama3.2:3b
+EMBEDDING_MODEL=nomic-embed-text
+```
 
-### 5. Put your resume in place
+### 4. Put your resume in place
 
 ```bash
 cp /path/to/your_resume.pdf data/resumes/
 ```
 
-## Running the server
-
-### Option A — Manual sanity check (no client, just Python)
-
-Quick way to confirm the server boots and tools import cleanly:
+### 5. Sanity-check the server
 
 ```bash
 python -m server.main
 ```
 
-Or test tools directly as plain function calls (bypasses MCP entirely, fastest way to debug the
-resume parser in isolation):
+You should see the FastMCP startup banner. `Ctrl+C` once confirmed — this was just a smoke test.
 
-```bash
-python scripts/test_tools.py
-```
+### 6. Connect it to Ollama via the bridge
 
-### Option B — Real usage, through an MCP client (ollama-mcp-bridge)
-
-This is the actual way you'll use the system day to day — natural language in, the model decides
-which tool to call.
-
-> **Note on client choice**: `ollmcp` (a TUI client) does not work on Windows — it depends on
-> `tty`/`termios`, which are POSIX-only and don't exist on Windows Python at all. We use
-> **`ollama-mcp-bridge`** instead: a lightweight FastAPI proxy that sits in front of Ollama and
-> injects MCP tools into `/api/chat`. Since it's a proxy, not a terminal UI reading raw keystrokes,
-> it works identically on Windows, macOS, and Linux.
-
-**Install the bridge:**
+`ollmcp` (the more common Ollama↔MCP client) depends on `tty`/`termios`, which don't exist on Windows. This project uses **`ollama-mcp-bridge`** instead — a FastAPI proxy that works identically across platforms.
 
 ```bash
 pip install ollama-mcp-bridge
-```
-
-**Config file** — `mcp-config.json` (already included in this project root):
-
-```json
-{
-  "mcpServers": {
-    "job-agent": {
-      "command": "python",
-      "args": ["-m", "server.main"]
-    }
-  }
-}
-```
-
-**Run the bridge** (from the project root, venv active):
-
-```bash
 ollama-mcp-bridge --config mcp-config.json
 ```
 
-This starts on `http://localhost:8000`, loads the job-agent MCP server, and connects to Ollama at
-`http://localhost:11434`.
+This starts on `http://localhost:8000`, connects to your MCP server, and proxies to Ollama.
 
-**Chat with it — two ways:**
+---
 
-*Option A — keep using the `ollama` CLI you already know, just point it at the bridge instead of
-directly at Ollama:*
+## Usage
 
-```bash
-set OLLAMA_HOST=http://localhost:8000        # Windows (cmd)
-# export OLLAMA_HOST=http://localhost:8000   # macOS/Linux
-
-ollama run llama3.2:3b
-```
-
-The bridge transparently proxies every endpoint except `/api/chat` — and that's exactly the one
-that gets MCP tools injected — so this behaves like a normal `ollama run` session, just now
-tool-aware.
-
-*Option B — direct API test with curl, useful for a first sanity check:*
+Talk to it via the bridge's chat endpoint:
 
 ```bash
-curl -X POST "http://localhost:8000/api/chat" -H "Content-Type: application/json" -d "{\"model\": \"llama3.2:3b\", \"messages\": [{\"role\": \"user\", \"content\": \"What tools are available?\"}]}"
+curl -X POST "http://localhost:8000/api/chat" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3.2:3b",
+    "messages": [{"role": "user", "content": "parse my resume at data/resumes/your_resume.pdf"}]
+  }'
 ```
 
-If it lists `ping`, `parse_resume`, `get_parsed_resume`, `list_resumes` — the whole chain (bridge ->
-Ollama -> your MCP server) is wired correctly.
-
-**First real test — confirm the wiring works before testing real tools:**
+Or, once your resume is parsed, keep going conversationally:
 
 ```
-ping the server
+"search for AI engineer jobs in Lahore"
+"rank my saved jobs by how well they match my resume"
+"tailor my resume for job 4"
+"generate a cover letter for job 4"
+"mark job 4 as applied"
+"show me my whole pipeline"
 ```
 
-Should return: `job-agent MCP server is alive.`
+> **Tip:** Always check the bridge's terminal log after a tool call. Small local models will occasionally fabricate a plausible-looking answer if a tool call actually failed — the log is the source of truth, not the chat response.
 
-**Then try the resume parser:**
+---
 
+## Data Flow: A Full Job-Hunt Cycle
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant Bridge as ollama-mcp-bridge
+    participant LLM as Ollama (llama3.2:3b)
+    participant MCP as job-agent MCP Server
+    participant JSearch
+    participant DB as SQLite
+
+    You->>Bridge: "parse my resume"
+    Bridge->>LLM: prompt + available tools
+    LLM-->>Bridge: call parse_resume(file_path)
+    Bridge->>MCP: parse_resume(...)
+    MCP->>MCP: extract text + hyperlinks (PDF)
+    MCP->>LLM: structure into JSON (separate call)
+    LLM-->>MCP: structured resume JSON
+    MCP-->>Bridge: normalized resume saved
+    Bridge-->>You: "Your resume is parsed"
+
+    You->>Bridge: "search AI jobs in Lahore"
+    Bridge->>LLM: prompt + tools
+    LLM-->>Bridge: call search_jobs(query, country)
+    Bridge->>MCP: search_jobs(...)
+    MCP->>JSearch: GET /search-v2
+    JSearch-->>MCP: job listings
+    MCP->>DB: save new jobs (deduped)
+    MCP-->>Bridge: N jobs saved
+    Bridge-->>You: real job list
+
+    You->>Bridge: "rank them for me"
+    Bridge->>LLM: prompt + tools
+    LLM-->>Bridge: call rank_jobs()
+    Bridge->>MCP: rank_jobs(...)
+    MCP->>LLM: embed resume once
+    loop for each saved job
+        MCP->>LLM: embed job description
+        MCP->>MCP: cosine similarity + skill overlap
+        MCP->>DB: cache Match score
+    end
+    MCP-->>Bridge: ranked results
+    Bridge-->>You: best-fit jobs first
+
+    You->>Bridge: "tailor my resume for job 4"
+    Bridge->>MCP: tailor_resume(job_id=4)
+    MCP->>LLM: rewrite summary + select bullets
+    LLM-->>MCP: tailored Markdown
+    MCP->>DB: mark Application as "drafted"
+    MCP-->>Bridge: tailored content + file path
+    Bridge-->>You: draft ready for review
+
+    You->>Bridge: "mark job 4 as applied"
+    Bridge->>MCP: log_application(4, "applied")
+    MCP->>DB: update status
+    MCP-->>Bridge: confirmed
+    Bridge-->>You: "Logged"
 ```
-parse my resume at data/resumes/your_resume.pdf
-```
 
-Note: `parse_resume` internally makes its own separate call to Ollama (via `cv_structurer.py`) to
-structure the resume text into JSON. So one request involves two rounds of model reasoning: the
-outer `ollmcp` model deciding to call the tool, and the tool's own internal Ollama call doing the
-structuring. Both can point at the same Ollama instance — that's expected, not a bug.
+---
 
-## Design notes
+## Design Decisions
 
-- **`get_active_cv()`** (in `server/agents/cv_store.py`) is the only interface other agents use to
-  read resume data. The matcher and writer agents (once built) will never touch the original
-  PDF/DOCX or call the parser directly.
-- Resume bullets are extracted **verbatim**, not paraphrased, during parsing — this matters because
-  the writer agent will tailor these later, and we don't want compounding rewrites drifting from
-  the original wording.
-- The JSON schema (`server/models/resume.py`) has an `extra_sections` catch-all field so future
-  resume changes (certifications, publications, etc.) don't require a schema migration.
-- `Job.external_job_id` is unique-indexed in SQLite to dedupe repeated JSearch results.
+A few choices worth explaining, since they weren't the obvious defaults:
+
+- **Embeddings via Ollama, not `sentence-transformers`.** Avoids pulling in `torch` (multi-GB) for a CPU-only setup — reuses the Ollama instance already running for everything else.
+- **PDF hyperlinks over text parsing for contact info.** Resumes often render email/LinkedIn/GitHub as icon+text, and the icon extracts as garbage glyphs. Reading the actual hyperlink *target* (`mailto:`, `tel:`, `github.com/...`) sidesteps that entirely and is far more reliable than asking a small model to parse messy header text.
+- **Deterministic fallbacks layered under LLM output.** Contact fields, in particular, use a priority order — PDF hyperlinks → regex → LLM guess — rather than trusting the model alone for anything with a predictable format.
+- **`resolve_cv()` as a single choke point.** Every tool accepting an optional `resume_id` funnels through one helper that treats null-like strings (`"null"`, `"none"`, `""`) the same as an actual omitted argument — a real failure mode observed with small local models, which sometimes send the literal string `"null"` instead of JSON `null`.
+- **Caching in the `Match` table.** Re-ranking after new searches only scores the *new* jobs; previously scored pairs return instantly from cache.
+- **The writer agent never auto-submits anything.** Tailored materials are drafts for review — the same philosophy carries into the planned Playwright apply-assist tool (see [Roadmap](#roadmap)).
+
+---
+
+## Known Limitations
+
+Being upfront about these, since they're inherent to running small models locally rather than bugs to fix:
+
+- **Tool-calling reliability.** `llama3.2:3b` occasionally fails to format a tool call correctly, or fabricates a plausible-looking answer when a tool call errors. Always check the bridge log, not just the chat response.
+- **Instruction adherence under constraints.** Despite explicit "don't fabricate" rules in the writer agent's prompt, a 3B model has been observed adding skills/technologies not present in the source resume (e.g. inventing "LangGraph" experience). **Tailored output should always be reviewed before use** — treat it as a first draft, not a final document.
+- **Performance.** CPU-only inference is slow. Multi-step operations (e.g. `rank_jobs` across many saved jobs) can take several minutes.
+- **JSearch response shape.** The live API nests results one level deeper (`data.jobs`) than its own published docs show — handled defensively in code, but a reminder that third-party API docs can drift from reality.
+
+---
+
+## Roadmap
+
+- [ ] **Application-assist tool** (`start_application`) — opens a job's apply page in a visible Playwright browser, auto-fills what it can confidently identify (name, email, phone, resume upload), and hands control back for manual review and submission. Deliberately **never auto-submits**.
+- [ ] Post-generation validation layer for the writer agent — cross-check generated skill mentions against the parsed resume's actual skill list before returning output.
+- [ ] Multi-page / cursor-based pagination support in `search_jobs`.
+
+---
+
+## License
+
+MIT
