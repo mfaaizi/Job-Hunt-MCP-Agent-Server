@@ -1,7 +1,6 @@
 <div align="center">
 
-<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=28&pause=1000&color=2E86AB&center=true&vCenter=true&width=900&lines=JOB+AGENT+MCP+SERVER;Autonomous+Multi-Agent+Job+Hunting;Local+LLMs+%7C+MCP+%7C+RAG-style+Matching;Search+%E2%86%92+Match+%E2%86%92+Tailor+%E2%86%92+Track" alt="Typing SVG" />
-
+<img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=28&pause=1000&color=800000&center=true&vCenter=true&width=900&lines=JOB+AGENT+MCP+SERVER;Autonomous+Multi-Agent+Job+Hunting;Local+LLMs+%7C+MCP+%7C+RAG-style+Matching;Search+%E2%86%92+Match+%E2%86%92+Tailor+%E2%86%92+Track" alt="Typing SVG" />
 <br/>
 
 **An autonomous, multi-agent job-hunting system exposed as an MCP server — running entirely on local, open-weight LLMs.**
